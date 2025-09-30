@@ -4,19 +4,32 @@ import dayjs from 'dayjs';
 
 // API Client
 const client = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'https://lab-test-backend-1.onrender.com/api/v1',
+  baseURL: import.meta.env.VITE_API_BASE_URL,
   headers: { 'Content-Type': 'application/json' }
 });
 
-// API Functions
+// API Functions aligned with provided cURL endpoints
 const api = {
+  // POST /bookings
   createBooking: (payload) => client.post('/bookings', payload),
-  getBookingsByPhone: (phone) => client.get(`/bookings/phone/9998887777`),
-  getBookingById: (id) => client.get(`/bookings/${id}`),
-  updateBookingById: (id, payload) => client.put(`/bookings/${id}`, payload),
-  cancelBookingById: (id) => client.delete(`/bookings/${id}`),
-  updateBookingByPhone: (phone, payload) => client.put(`/bookings/phone/${phone}`, payload),
-  cancelBookingByPhone: (phone) => client.delete(`/bookings/phone/${phone}`)
+
+  // GET /bookings/phone/:phone
+  getBookingsByPhone: (phone) => client.get(`/bookings/phone/${encodeURIComponent(phone)}`),
+
+  // POST /bookings/get_phone { phone }
+  getBookingsByPhoneBody: (phone) => client.post('/bookings/get_phone', { phone }),
+
+  // PUT /bookings/phone/:phone
+  updateBookingByPhone: (phone, payload) => client.put(`/bookings/phone/${encodeURIComponent(phone)}`, payload),
+
+  // Alternative: PUT /bookings/phone { phone, ...payload }
+  updateBookingByPhoneBody: (phone, payload) => client.put('/bookings/phone', { phone, ...payload }),
+
+  // DELETE /bookings/phone/:phone
+  cancelBookingByPhone: (phone) => client.delete(`/bookings/phone/${encodeURIComponent(phone)}`),
+
+  // Alternative: DELETE /bookings/phone with body { phone }
+  cancelBookingByPhoneBody: (phone) => client.delete('/bookings/phone', { data: { phone } })
 };
 
 // Toast Component
@@ -95,7 +108,7 @@ const StatusBadge = ({ status }) => {
 };
 
 // Phone Search Component
-const PhoneSearch = ({ onBookingsFound, onCreateNew, showToast }) => {
+const PhoneSearch = ({ onBookingsFound, onCreateNew, onPhoneFound, showToast }) => {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -113,8 +126,10 @@ const PhoneSearch = ({ onBookingsFound, onCreateNew, showToast }) => {
 
     setLoading(true);
     try {
-      const response = await api.getBookingsByPhone(phone);
+      // Prefer POST body variant to satisfy backends expecting req.body.phone
+      const response = await api.getBookingsByPhoneBody(phone);
       onBookingsFound(response.data.data);
+      if (onPhoneFound) onPhoneFound(phone);
       showToast(response.data.message, 'success');
     } catch (error) {
       if (error.response?.status === 404) {
@@ -204,13 +219,14 @@ const PhoneSearch = ({ onBookingsFound, onCreateNew, showToast }) => {
 };
 
 // Bookings List Component
-const BookingsList = ({ bookings, onViewDetails, onUpdateStatus, onCancel, onBack, showToast }) => {
+const BookingsList = ({ bookings, currentPhone, onViewDetails, onUpdateStatus, onCancel, onBack, showToast }) => {
   const [updatingBookings, setUpdatingBookings] = useState(new Set());
 
   const handleStatusUpdate = async (bookingId, newStatus) => {
     setUpdatingBookings(prev => new Set(prev).add(bookingId));
     try {
-      await api.updateBookingById(bookingId, { booking_status: newStatus });
+      if (!currentPhone) throw new Error('Missing phone for update');
+      await api.updateBookingByPhone(currentPhone, { booking_status: newStatus });
       showToast('Booking status updated successfully', 'success');
       // Refresh the bookings list
       window.location.reload();
@@ -228,7 +244,8 @@ const BookingsList = ({ bookings, onViewDetails, onUpdateStatus, onCancel, onBac
     if (!window.confirm('Are you sure you want to cancel this booking?')) return;
     
     try {
-      await api.cancelBookingById(bookingId);
+      if (!currentPhone) throw new Error('Missing phone for cancellation');
+      await api.cancelBookingByPhone(currentPhone);
       showToast('Booking cancelled successfully', 'success');
       onCancel();
     } catch (error) {
@@ -777,7 +794,7 @@ const CreateBookingForm = ({ onBack, onSuccess, showToast }) => {
 };
 
 // Booking Details Component
-const BookingDetails = ({ bookingId, onBack, showToast }) => {
+const BookingDetails = ({ bookingId, currentPhone, onBack, showToast }) => {
   const [booking, setBooking] = useState(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -788,8 +805,16 @@ const BookingDetails = ({ bookingId, onBack, showToast }) => {
 
   const fetchBookingDetails = async () => {
     try {
-      const response = await api.getBookingById(bookingId);
-      setBooking(response.data.data);
+      if (!currentPhone) throw new Error('Missing phone for fetching details');
+      // Prefer POST body variant to satisfy backends expecting req.body.phone
+      const response = await api.getBookingsByPhoneBody(currentPhone);
+      const data = response.data.data;
+      const all = [
+        ...(data?.bookings || []),
+        ...(data?.latest_booking ? [data.latest_booking] : [])
+      ];
+      const found = all.find((b) => b.booking_id === bookingId) || null;
+      setBooking(found);
     } catch (error) {
       showToast(error.response?.data?.message || 'Error fetching booking details', 'error');
       onBack();
@@ -800,7 +825,8 @@ const BookingDetails = ({ bookingId, onBack, showToast }) => {
   const handleStatusUpdate = async (newStatus) => {
     setUpdating(true);
     try {
-      await api.updateBookingById(bookingId, { booking_status: newStatus });
+      if (!currentPhone) throw new Error('Missing phone for update');
+      await api.updateBookingByPhone(currentPhone, { booking_status: newStatus });
       showToast('Booking status updated successfully', 'success');
       fetchBookingDetails();
     } catch (error) {
@@ -813,7 +839,8 @@ const BookingDetails = ({ bookingId, onBack, showToast }) => {
     if (!window.confirm('Are you sure you want to cancel this booking?')) return;
     
     try {
-      await api.cancelBookingById(bookingId);
+      if (!currentPhone) throw new Error('Missing phone for cancellation');
+      await api.cancelBookingByPhone(currentPhone);
       showToast('Booking cancelled successfully', 'success');
       onBack();
     } catch (error) {
@@ -1126,6 +1153,7 @@ const App = () => {
   const [selectedBookingId, setSelectedBookingId] = useState(null);
   const [successData, setSuccessData] = useState(null);
   const [toast, setToast] = useState(null);
+  const [currentPhone, setCurrentPhone] = useState(null);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type });
@@ -1159,6 +1187,7 @@ const App = () => {
     setBookings(null);
     setSelectedBookingId(null);
     setSuccessData(null);
+    setCurrentPhone(null);
   };
 
   const handleCreateAnother = () => {
@@ -1195,6 +1224,7 @@ const App = () => {
         <PhoneSearch
           onBookingsFound={handleBookingsFound}
           onCreateNew={handleCreateNew}
+          onPhoneFound={setCurrentPhone}
           showToast={showToast}
         />
       )}
@@ -1202,6 +1232,7 @@ const App = () => {
       {currentView === 'bookings' && bookings && (
         <BookingsList
           bookings={bookings}
+          currentPhone={currentPhone}
           onViewDetails={handleViewDetails}
           onUpdateStatus={handleBookingUpdate}
           onCancel={handleBookingUpdate}
@@ -1221,6 +1252,7 @@ const App = () => {
       {currentView === 'details' && selectedBookingId && (
         <BookingDetails
           bookingId={selectedBookingId}
+          currentPhone={currentPhone}
           onBack={() => setCurrentView('bookings')}
           showToast={showToast}
         />
